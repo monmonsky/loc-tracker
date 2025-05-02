@@ -25,6 +25,14 @@ export default defineEventHandler(async (event) => {
       })
     }
     
+    // Ambil informasi device jika tracking dimulai dari client
+    const req = event.node.req
+    const deviceInfo = {
+      userAgent: req.headers['user-agent'] || '',
+      ip: req.headers['x-forwarded-for'] || req.connection.remoteAddress || '',
+      browser: getBrowserInfo(req.headers['user-agent']),
+    }
+    
     // Jika memperbarui lokasi, simpan history
     if (body.location) {
       if (!devices[deviceIndex].locationHistory) {
@@ -44,6 +52,7 @@ export default defineEventHandler(async (event) => {
     devices[deviceIndex] = {
       ...devices[deviceIndex],
       ...body,
+      deviceInfo: body.location ? deviceInfo : devices[deviceIndex].deviceInfo, // Update device info hanya saat ada lokasi
       lastUpdate: Date.now()
     }
     
@@ -58,3 +67,15 @@ export default defineEventHandler(async (event) => {
     })
   }
 })
+
+function getBrowserInfo(userAgent) {
+  if (!userAgent) return 'Unknown'
+  
+  if (userAgent.includes('Chrome')) return 'Chrome'
+  if (userAgent.includes('Firefox')) return 'Firefox'
+  if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) return 'Safari'
+  if (userAgent.includes('Edge')) return 'Edge'
+  if (userAgent.includes('MSIE') || userAgent.includes('Trident')) return 'Internet Explorer'
+  
+  return 'Other'
+}

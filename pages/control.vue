@@ -15,17 +15,35 @@
     <div class="devices-container">
       <div v-for="device in devices" :key="device.id" class="device-card">
         <div class="device-header">
-          <span class="device-name">{{ device.name }}</span>
+          <div class="device-name-container">
+            <input 
+              v-if="editingDevice === device.id" 
+              v-model="editName" 
+              @keyup.enter="saveDeviceName(device)"
+              @blur="saveDeviceName(device)"
+              class="name-input"
+              ref="nameInput"
+            />
+            <span v-else class="device-name" @click="startEdit(device)">
+              {{ device.name }}
+              <span class="edit-icon">✎</span>
+            </span>
+          </div>
           <span :class="['status', device.status === 'active' ? 'status-active' : 'status-inactive']">
             {{ device.status }}
           </span>
-          <span v-if="device.status === 'active'" class="tracking-indicator">
-            📍 Real-time tracking
-          </span>
+        </div>
+        
+        <div v-if="device.deviceInfo" class="device-info">
+          <p><strong>Device:</strong> {{ device.deviceInfo.browser }}</p>
+          <p><strong>IP:</strong> {{ device.deviceInfo.ip }}</p>
+          <p><strong>User Agent:</strong> {{ device.deviceInfo.userAgent }}</p>
         </div>
         
         <div v-if="device.location" class="location-info">
-          Last Update: {{ formatTime(device.lastUpdate) }}
+          <p><strong>Last Update:</strong> {{ formatTime(device.lastUpdate) }}</p>
+          <p><strong>Coordinates:</strong> {{ device.location.lat.toFixed(6) }}, {{ device.location.lon.toFixed(6) }}</p>
+          <p v-if="device.accuracy"><strong>Accuracy:</strong> {{ device.accuracy.toFixed(1) }}m</p>
         </div>
         
         <div class="device-actions">
@@ -38,7 +56,7 @@
         </div>
         
         <div v-if="device.trackingLink" class="link-box">
-          <div class="link-label">Tracking Link (share with others):</div>
+          <div class="link-label">Tracking Link (share with client):</div>
           {{ device.trackingLink }}
           <button @click="copyLink(device.trackingLink)" class="btn btn-copy">Copy</button>
         </div>
@@ -66,7 +84,8 @@
 const devices = ref([])
 const showModal = ref(false)
 const selectedLocation = ref(null)
-const watchIds = reactive({})
+const editingDevice = ref(null)
+const editName = ref('')
 
 // Cek apakah ini akses client tracking
 const isClientView = computed(() => {
@@ -113,6 +132,33 @@ const addDevice = async () => {
   }
 }
 
+const startEdit = (device) => {
+  editingDevice.value = device.id
+  editName.value = device.name
+  // Auto focus input saat edit dimulai
+  nextTick(() => {
+    const input = document.querySelector('.name-input')
+    if (input) input.focus()
+  })
+}
+
+const saveDeviceName = async (device) => {
+  if (editName.value && editName.value !== device.name) {
+    try {
+      await $fetch(`/api/device/${device.id}`, {
+        method: 'PUT',
+        body: {
+          name: editName.value
+        }
+      })
+      await fetchDevices()
+    } catch (error) {
+      console.error('Failed to update device name:', error)
+    }
+  }
+  editingDevice.value = null
+}
+
 const startTracking = async (device) => {
   // Hanya set device sebagai active tanpa mulai tracking lokal
   try {
@@ -133,11 +179,6 @@ const startTracking = async (device) => {
 }
 
 const stopTracking = async (device) => {
-  if (watchIds[device.id]) {
-    navigator.geolocation.clearWatch(watchIds[device.id])
-    delete watchIds[device.id]
-  }
-  
   try {
     await $fetch(`/api/device/${device.id}`, {
       method: 'PUT',
@@ -161,10 +202,6 @@ const showLocation = (device) => {
 }
 
 const removeDevice = async (device) => {
-  if (device.status === 'active') {
-    await stopTracking(device)
-  }
-  
   try {
     await $fetch(`/api/device/${device.id}`, { method: 'DELETE' })
     await fetchDevices()
@@ -185,12 +222,6 @@ const closeModal = () => {
   showModal.value = false
   selectedLocation.value = null
 }
-
-onUnmounted(() => {
-  Object.keys(watchIds).forEach(deviceId => {
-    navigator.geolocation.clearWatch(watchIds[deviceId])
-  })
-})
 </script>
 
 <style scoped>
@@ -245,9 +276,32 @@ h1 {
   margin-bottom: 10px;
 }
 
+.device-name-container {
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+
 .device-name {
   font-size: 18px;
   font-weight: bold;
+  cursor: pointer;
+  padding: 5px;
+}
+
+.edit-icon {
+  margin-left: 5px;
+  color: #999;
+  font-size: 16px;
+}
+
+.name-input {
+  font-size: 18px;
+  font-weight: bold;
+  border: 1px solid #2196F3;
+  border-radius: 4px;
+  padding: 4px 8px;
+  background: white;
 }
 
 .status {
@@ -265,16 +319,26 @@ h1 {
   background-color: #f44336;
 }
 
-.tracking-indicator {
-  color: #4CAF50;
+.device-info {
+  background-color: #f0f0f0;
+  padding: 10px;
+  border-radius: 4px;
+  margin-bottom: 10px;
   font-size: 14px;
-  margin-left: 10px;
+}
+
+.device-info p {
+  margin: 5px 0;
 }
 
 .location-info {
-  font-size: 12px;
+  font-size: 14px;
   color: #666;
   margin-bottom: 10px;
+}
+
+.location-info p {
+  margin: 5px 0;
 }
 
 .device-actions {
