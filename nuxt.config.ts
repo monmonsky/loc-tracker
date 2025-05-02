@@ -6,7 +6,7 @@ export default defineNuxtConfig({
   modules: ['@vueuse/nuxt', '@nuxt/icon'],
   app: {
     head: {
-      title: 'Device Location Tracker'
+      title: 'MAKEOVER X NIKI'
     }
   }
 })
