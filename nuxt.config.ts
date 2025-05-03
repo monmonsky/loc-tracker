@@ -7,7 +7,12 @@ export default defineNuxtConfig({
   app: {
     head: {
       title: 'Make Over App',
-      
+      link: [
+        { rel: 'stylesheet', href: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css' }
+      ],
+      script: [
+        { src: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js' }
+      ]
     }
   },
   runtimeConfig: {

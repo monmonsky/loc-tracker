@@ -7,13 +7,14 @@
       <ol>
         <li>Click "Generate Link" for a device</li>
         <li>Copy the tracking link</li>
-        <li>Send link to client - they'll automatically start sharing location</li>
+        <li>Send link to client</li>
         <li>View client's location from control panel</li>
       </ol>
     </div>
     
     <div class="devices-container">
       <div v-for="device in devices" :key="device.id" class="device-card">
+        <!-- Device Header -->
         <div class="device-header">
           <div class="device-name-container">
             <input 
@@ -34,35 +35,47 @@
           </span>
         </div>
         
+        <!-- Device Info -->
         <div v-if="device.deviceInfo" class="device-info">
-          <div class="info-row">
-            <div class="info-label">Device:</div>
-            <div class="info-value">{{ device.deviceInfo.brand }} {{ device.deviceInfo.device }}</div>
+          <div class="info-grid">
+            <div class="info-item">
+              <span class="label">Device:</span>
+              <span class="value">{{ device.deviceInfo.brand }} {{ device.deviceInfo.device }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">OS:</span>
+              <span class="value">{{ device.deviceInfo.os }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">Browser:</span>
+              <span class="value">{{ device.deviceInfo.browser }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">IP:</span>
+              <span class="value">{{ device.deviceInfo.ip }}</span>
+            </div>
           </div>
-          <div class="info-row">
-            <div class="info-label">OS:</div>
-            <div class="info-value">{{ device.deviceInfo.os }}</div>
-          </div>
-          <div class="info-row">
-            <div class="info-label">Browser:</div>
-            <div class="info-value">{{ device.deviceInfo.browser }}</div>
-          </div>
-          <div class="info-row">
-            <div class="info-label">IP:</div>
-            <div class="info-value">{{ device.deviceInfo.ip }}</div>
-          </div>
-          <details v-if="device.deviceInfo.userAgent">
-            <summary class="user-agent-summary">View User Agent</summary>
-            <div class="user-agent">{{ device.deviceInfo.userAgent }}</div>
-          </details>
         </div>
         
+        <!-- Location Info -->
         <div v-if="device.location" class="location-info">
-          <p><strong>Last Update:</strong> {{ formatTime(device.lastUpdate) }}</p>
-          <p><strong>Coordinates:</strong> {{ device.location.lat.toFixed(6) }}, {{ device.location.lon.toFixed(6) }}</p>
-          <p v-if="device.accuracy"><strong>Accuracy:</strong> {{ device.accuracy.toFixed(1) }}m</p>
+          <div class="info-grid">
+            <div class="info-item">
+              <span class="label">Last Update:</span>
+              <span class="value">{{ formatTime(device.lastUpdate) }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">Coordinates:</span>
+              <span class="value">{{ device.location.lat.toFixed(6) }}, {{ device.location.lon.toFixed(6) }}</span>
+            </div>
+            <div class="info-item" v-if="device.accuracy">
+              <span class="label">Accuracy:</span>
+              <span class="value">{{ device.accuracy.toFixed(1) }}m</span>
+            </div>
+          </div>
         </div>
         
+        <!-- Actions -->
         <div class="device-actions">
           <button @click="startTracking(device)" :disabled="device.status === 'active'" class="btn">
             {{ device.status === 'active' ? 'Link Generated' : 'Generate Link' }}
@@ -72,18 +85,20 @@
           <button @click="removeDevice(device)" class="btn btn-danger">Remove</button>
         </div>
         
+        <!-- Tracking Link -->
         <div v-if="device.trackingLink" class="link-box">
-          <div class="link-label">Tracking Link (with PWA support):</div>
-          {{ device.trackingLink }}
-          <button @click="copyLink(device.trackingLink)" class="btn btn-copy">Copy</button>
-          <p class="link-hint">User dapat install sebagai PWA dari link ini</p>
+          <div class="link-label">Tracking Link:</div>
+          <div class="link-content">
+            <span class="link-url">{{ device.trackingLink }}</span>
+            <button @click="copyLink(device.trackingLink)" class="btn btn-copy">Copy</button>
+          </div>
         </div>
       </div>
     </div>
     
     <button @click="addDevice" class="btn btn-add">+ Add New Device</button>
     
-    <!-- Modal for showing map with history -->
+    <!-- OpenStreetMap Modal -->
     <div v-if="showModal" class="overlay" @click="closeModal">
       <div class="map-modal" @click.stop>
         <span class="close-btn" @click="closeModal">&times;</span>
@@ -118,753 +133,667 @@
 </template>
 
 <script setup>
-const devices = ref([])
-const showModal = ref(false)
-const selectedDevice = ref(null)
-const editingDevice = ref(null)
-const editName = ref('')
-let map, polyline, markers = [], infoWindows = []
-
-const config = useRuntimeConfig()
-
-useHead({
-  script: [
-    {
-      src: `https://maps.googleapis.com/maps/api/js?key=${config.public.googleMapsApiKey}`,
-      async: true,
-      defer: true
-    }
-  ]
-})
-
-const formatTimeDiff = (timeDiff) => {
-  const seconds = Math.floor(timeDiff / 1000)
-  const minutes = Math.floor(seconds / 60)
-  const hours = Math.floor(minutes / 60)
+  const devices = ref([])
+  const showModal = ref(false)
+  const selectedDevice = ref(null)
+  const editingDevice = ref(null)
+  const editName = ref('')
+  let map = null
+  let polyline = null
+  let markers = []
   
-  if (hours > 0) return `${hours}h ${minutes % 60}m`
-  if (minutes > 0) return `${minutes}m ${seconds % 60}s`
-  return `${seconds}s`
-}
-
-const calculateDistance = (lat1, lon1, lat2, lon2) => {
-  const R = 6371; // Radius bumi dalam km
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-          Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-          Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R * c;
-}
-
-// Cek apakah ini akses client tracking
-const isClientView = computed(() => {
-  const query = useRoute().query
-  return query.deviceId && (query.lat || query.lon)
-})
-
-// Redirect ke client view jika parameter deviceId ada
-onMounted(() => {
-  if (isClientView.value) {
-    navigateTo({
-      path: '/product',
-      query: useRoute().query
-    })
-  } else {
-    fetchDevices()
-    setInterval(fetchDevices, 5000)
+  const formatTimeDiff = (timeDiff) => {
+    const seconds = Math.floor(timeDiff / 1000)
+    const minutes = Math.floor(seconds / 60)
+    const hours = Math.floor(minutes / 60)
+    
+    if (hours > 0) return `${hours}h ${minutes % 60}m`
+    if (minutes > 0) return `${minutes}m ${seconds % 60}s`
+    return `${seconds}s`
   }
-})
-
-const formatTime = (timestamp) => {
-  return new Date(timestamp).toLocaleTimeString()
-}
-
-const fetchDevices = async () => {
-  try {
-    const response = await $fetch('/api/devices')
-    devices.value = response
-  } catch (error) {
-    console.error('Failed to fetch devices:', error)
+  
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // Radius bumi dalam km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
   }
-}
-
-const addDevice = async () => {
-  try {
-    await $fetch('/api/device/add', { 
-      method: 'POST',
-      body: {}
-    })
-    await fetchDevices()
-  } catch (error) {
-    console.error('Failed to add device:', error)
-    alert('Failed to add device: ' + error.message)
-  }
-}
-
-const startEdit = (device) => {
-  editingDevice.value = device.id
-  editName.value = device.name
-  // Auto focus input saat edit dimulai
-  nextTick(() => {
-    const input = document.querySelector('.name-input')
-    if (input) input.focus()
+  
+  // Cek apakah ini akses client tracking
+  const isClientView = computed(() => {
+    const query = useRoute().query
+    return query.deviceId && (query.lat || query.lon)
   })
-}
+  
+  // Redirect ke client view jika parameter deviceId ada
+  onMounted(() => {
 
-const saveDeviceName = async (device) => {
-  if (editName.value && editName.value !== device.name) {
+    if (typeof L === 'undefined') {
+      console.error('Leaflet is not loaded properly')
+    }
+    
+    if (isClientView.value) {
+      navigateTo({
+        path: '/product',
+        query: useRoute().query
+      })
+    } else {
+      fetchDevices()
+      setInterval(fetchDevices, 5000)
+    }
+  })
+  
+  const formatTime = (timestamp) => {
+    return new Date(timestamp).toLocaleTimeString()
+  }
+  
+  const fetchDevices = async () => {
+    try {
+      const response = await $fetch('/api/devices')
+      devices.value = response
+    } catch (error) {
+      console.error('Failed to fetch devices:', error)
+    }
+  }
+  
+  const addDevice = async () => {
+    try {
+      await $fetch('/api/device/add', { 
+        method: 'POST',
+        body: {}
+      })
+      await fetchDevices()
+    } catch (error) {
+      console.error('Failed to add device:', error)
+      alert('Failed to add device: ' + error.message)
+    }
+  }
+  
+  const startEdit = (device) => {
+    editingDevice.value = device.id
+    editName.value = device.name
+    // Auto focus input saat edit dimulai
+    nextTick(() => {
+      const input = document.querySelector('.name-input')
+      if (input) input.focus()
+    })
+  }
+  
+  const saveDeviceName = async (device) => {
+    if (editName.value && editName.value !== device.name) {
+      try {
+        await $fetch(`/api/device/${device.id}`, {
+          method: 'PUT',
+          body: {
+            name: editName.value
+          }
+        })
+        await fetchDevices()
+      } catch (error) {
+        console.error('Failed to update device name:', error)
+      }
+    }
+    editingDevice.value = null
+  }
+  
+  const startTracking = async (device) => {
+    // Hanya set device sebagai active tanpa mulai tracking lokal
+    try {
+      const trackingLink = `${window.location.origin}/product?deviceId=${device.id}`
+      const pwaLink = `${window.location.origin}/install?deviceId=${device.id}`
+      
+      await $fetch(`/api/device/${device.id}`, {
+        method: 'PUT',
+        body: {
+          status: 'active',
+          trackingLink: trackingLink,
+          pwaLink: pwaLink
+        }
+      })
+      
+      await fetchDevices()
+    } catch (error) {
+      console.error('Failed to update device:', error)
+    }
+  }
+  
+  const stopTracking = async (device) => {
     try {
       await $fetch(`/api/device/${device.id}`, {
         method: 'PUT',
         body: {
-          name: editName.value
+          status: 'inactive',
+          location: null,
+          trackingLink: null
         }
       })
       await fetchDevices()
     } catch (error) {
-      console.error('Failed to update device name:', error)
+      console.error('Failed to stop tracking:', error)
     }
   }
-  editingDevice.value = null
-}
-
-const startTracking = async (device) => {
-  // Hanya set device sebagai active tanpa mulai tracking lokal
-  try {
-    const trackingLink = `${window.location.origin}/product?deviceId=${device.id}`
-    const pwaLink = `${window.location.origin}/install?deviceId=${device.id}`
-    
-    await $fetch(`/api/device/${device.id}`, {
-      method: 'PUT',
-      body: {
-        status: 'active',
-        trackingLink: trackingLink,
-        pwaLink: pwaLink
-      }
-    })
-    
-    await fetchDevices()
-  } catch (error) {
-    console.error('Failed to update device:', error)
-  }
-}
-
-const stopTracking = async (device) => {
-  try {
-    await $fetch(`/api/device/${device.id}`, {
-      method: 'PUT',
-      body: {
-        status: 'inactive',
-        location: null,
-        trackingLink: null
-      }
-    })
-    await fetchDevices()
-  } catch (error) {
-    console.error('Failed to stop tracking:', error)
-  }
-}
-
-const showLocation = (device) => {
-  if (device.location) {
-    selectedDevice.value = device
-    showModal.value = true
-    
-    // Load Google Maps setelah modal terbuka
-    nextTick(() => {
-      loadGoogleMaps(device)
-    })
-  }
-}
-
-const removeDevice = async (device) => {
-  try {
-    await $fetch(`/api/device/${device.id}`, { method: 'DELETE' })
-    await fetchDevices()
-  } catch (error) {
-    console.error('Failed to remove device:', error)
-  }
-}
-
-const copyLink = (link) => {
-  navigator.clipboard.writeText(link).then(() => {
-    alert('Tracking link copied to clipboard!')
-  }).catch((error) => {
-    console.error('Failed to copy link:', error)
-  })
-}
-
-
-const closeModal = () => {
-  showModal.value = false
-  selectedDevice.value = null
-   // Clear markers
-   markers.forEach(marker => marker.setMap(null))
-  markers = []
-  // Clear info windows
-  infoWindows.forEach(infoWindow => infoWindow.close())
-  infoWindows = []
-}
-
-const formatDateTime = (timestamp) => {
-  const date = new Date(timestamp)
-  return date.toLocaleString()
-}
-
-const loadGoogleMaps = (device) => {
-  const script = document.createElement('script')
-  script.src = `https://maps.googleapis.com/maps/api/js?key=${config.public.googleMapsApiKey}`
-  script.onload = () => initializeMap(device)
-  document.head.appendChild(script)
-}
-
-const initializeMap = (device) => {
-  const mapElement = document.getElementById('map')
-  if (!mapElement) return
   
-  const lastLocation = device.location
-  if (!lastLocation) return
-  
-  // Initialize map
-  map = new google.maps.Map(mapElement, {
-    center: { lat: lastLocation.lat, lng: lastLocation.lon },
-    zoom: 15
-  })
-  
-  // Draw polyline for history
-  if (device.locationHistory && device.locationHistory.length > 1) {
-    const path = device.locationHistory.map(item => ({
-      lat: item.location.lat,
-      lng: item.location.lon
-    }))
-    
-    polyline = new google.maps.Polyline({
-      path: path,
-      geodesic: true,
-      strokeColor: '#2196F3',
-      strokeOpacity: 1.0,
-      strokeWeight: 2,
-      map: map
-    })
-    
-    // Add interactive segments
-    for (let i = 0; i < device.locationHistory.length - 1; i++) {
-      const currentPoint = device.locationHistory[i]
-      const nextPoint = device.locationHistory[i + 1]
+  const showLocation = (device) => {
+    if (device.location) {
+      selectedDevice.value = device
+      showModal.value = true
       
-      const segmentPath = [
-        { lat: currentPoint.location.lat, lng: currentPoint.location.lon },
-        { lat: nextPoint.location.lat, lng: nextPoint.location.lon }
-      ]
-      
-      const segment = new google.maps.Polyline({
-        path: segmentPath,
-        strokeColor: '#2196F3',
-        strokeOpacity: 0.01, // Almost invisible but clickable
-        strokeWeight: 10,
-        map: map
-      })
-      
-      // Create info window for segment
-      const midPoint = {
-        lat: (currentPoint.location.lat + nextPoint.location.lat) / 2,
-        lng: (currentPoint.location.lon + nextPoint.location.lon) / 2
-      }
-      
-      const distance = calculateDistance(
-        currentPoint.location.lat, 
-        currentPoint.location.lon,
-        nextPoint.location.lat, 
-        nextPoint.location.lon
-      )
-      
-      const timeDiff = nextPoint.timestamp - currentPoint.timestamp
-      const timeStr = formatTimeDiff(timeDiff)
-      
-      const segmentInfo = new google.maps.InfoWindow({
-        content: `
-          <div>
-            <strong>Path Segment ${i + 1}</strong><br>
-            From: ${formatDateTime(currentPoint.timestamp)}<br>
-            To: ${formatDateTime(nextPoint.timestamp)}<br>
-            Distance: ${(distance * 1000).toFixed(1)} meters<br>
-            Time: ${timeStr}
-          </div>
-        `,
-        position: midPoint
-      })
-      
-      segment.addListener('click', () => {
-        // Close all info windows
-        infoWindows.forEach(infoWindow => infoWindow.close())
-        // Open this one
-        segmentInfo.open(map)
-      })
-      
-      infoWindows.push(segmentInfo)
-    }
-    
-    // Add markers for each location
-    device.locationHistory.forEach((item, index) => {
-      const isCurrent = index === device.locationHistory.length - 1
-      
-      const markerOptions = {
-        position: { lat: item.location.lat, lng: item.location.lon },
-        map: map,
-        title: formatDateTime(item.timestamp)
-      }
-      
-      if (isCurrent) {
-        markerOptions.animation = google.maps.Animation.BOUNCE
-        markerOptions.icon = {
-          url: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png'
+      // Tunggu modal terbuka dan Leaflet loaded
+      nextTick(() => {
+        if (typeof L !== 'undefined') {
+          initializeMap(device)
+        } else {
+          console.error('Leaflet not loaded yet')
+          // Atau coba load ulang script Leaflet
         }
-      } else {
-        markerOptions.label = (index + 1).toString()
+      })
+    }
+  }
+  
+  const removeDevice = async (device) => {
+    try {
+      await $fetch(`/api/device/${device.id}`, { method: 'DELETE' })
+      await fetchDevices()
+    } catch (error) {
+      console.error('Failed to remove device:', error)
+    }
+  }
+  
+  const copyLink = (link) => {
+    navigator.clipboard.writeText(link).then(() => {
+      alert('Tracking link copied to clipboard!')
+    }).catch((error) => {
+      console.error('Failed to copy link:', error)
+    })
+  }
+  
+  
+  const closeModal = () => {
+    showModal.value = false
+    selectedDevice.value = null
+    
+    // Clear Leaflet markers
+    if (markers.length > 0) {
+      markers.forEach(marker => {
+        map.removeLayer(marker)
+      })
+      markers = []
+    }
+    
+    // Clear polyline
+    if (polyline) {
+      map.removeLayer(polyline)
+      polyline = null
+    }
+    
+    // Remove map entirely
+    if (map) {
+      map.remove()
+      map = null
+    }
+  }
+  
+  const formatDateTime = (timestamp) => {
+    const date = new Date(timestamp)
+    return date.toLocaleString()
+  }
+  
+  const loadGoogleMaps = (device) => {
+    const script = document.createElement('script')
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${config.public.googleMapsApiKey}`
+    script.onload = () => initializeMap(device)
+    document.head.appendChild(script)
+  }
+  
+  const initializeMap = (device) => {
+    const mapElement = document.getElementById('map')
+    if (!mapElement) return
+    
+    // Clear jika ada map sebelumnya
+    if (map) {
+      map.remove()
+    }
+    
+    const lastLocation = device.location
+    if (!lastLocation) return
+    
+    // Initialize Leaflet map
+    map = L.map('map').setView([lastLocation.lat, lastLocation.lon], 15)
+    
+    // Add OpenStreetMap tiles
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map)
+    
+    // Clear existing markers array
+    markers = []
+    
+    // Draw path if history exists
+    if (device.locationHistory && device.locationHistory.length > 1) {
+      const latLngs = device.locationHistory.map(item => [item.location.lat, item.location.lon])
+      
+      // Create blue route line
+      polyline = L.polyline(latLngs, { color: '#2196F3', weight: 3 }).addTo(map)
+      
+      // Add interactive segments
+      for (let i = 0; i < device.locationHistory.length - 1; i++) {
+        const currentPoint = device.locationHistory[i]
+        const nextPoint = device.locationHistory[i + 1]
+        
+        const segmentPath = [
+          [currentPoint.location.lat, currentPoint.location.lon],
+          [nextPoint.location.lat, nextPoint.location.lon]
+        ]
+        
+        const segment = L.polyline(segmentPath, { 
+          color: '#2196F3', 
+          weight: 10,
+          opacity: 0 // Invisible but clickable
+        }).addTo(map)
+        
+        // Calculate distance and time
+        const distance = calculateDistance(
+          currentPoint.location.lat, 
+          currentPoint.location.lon,
+          nextPoint.location.lat, 
+          nextPoint.location.lon
+        )
+        
+        const timeDiff = nextPoint.timestamp - currentPoint.timestamp
+        const timeStr = formatTimeDiff(timeDiff)
+        
+        // Add click handler for segment info
+        segment.on('click', () => {
+          const midPoint = L.latLng(
+            (currentPoint.location.lat + nextPoint.location.lat) / 2,
+            (currentPoint.location.lon + nextPoint.location.lon) / 2
+          )
+          
+          L.popup()
+            .setLatLng(midPoint)
+            .setContent(`
+              <div>
+                <strong>Path Segment ${i + 1}</strong><br>
+                From: ${formatDateTime(currentPoint.timestamp)}<br>
+                To: ${formatDateTime(nextPoint.timestamp)}<br>
+                Distance: ${(distance * 1000).toFixed(1)} meters<br>
+                Time: ${timeStr}
+              </div>
+            `)
+            .openOn(map)
+        })
       }
       
-      const marker = new google.maps.Marker(markerOptions)
-      
-      // Add info window
-      const infoWindow = new google.maps.InfoWindow({
-        content: `
+      // Add markers for each location
+      device.locationHistory.forEach((item, index) => {
+        const isCurrent = index === device.locationHistory.length - 1
+        
+        const markerOptions = {}
+        
+        // Different style for current location
+        if (isCurrent) {
+          const currentIcon = L.divIcon({
+            className: 'current-location-marker',
+            html: '<div style="background-color: #4CAF50; width: 15px; height: 15px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 0 2px #4CAF50;"></div>',
+            iconSize: [15, 15],
+            iconAnchor: [7.5, 7.5]
+          })
+          markerOptions.icon = currentIcon
+        }
+        
+        const marker = L.marker([item.location.lat, item.location.lon], markerOptions).addTo(map)
+        
+        // Add popup
+        marker.bindPopup(`
           <div>
             <strong>${isCurrent ? 'Current Location' : 'Location ' + (index + 1)}</strong><br>
             Time: ${formatDateTime(item.timestamp)}<br>
             Coordinates: ${item.location.lat.toFixed(6)}, ${item.location.lon.toFixed(6)}
           </div>
-        `
+        `)
+        
+        markers.push(marker)
       })
       
-      marker.addListener('click', () => {
-        // Close all info windows
-        infoWindows.forEach(w => w.close())
-        infoWindow.open(map, marker)
+      // Fit map to show all markers
+      map.fitBounds(polyline.getBounds())
+    } else {
+      // Single location marker
+      const currentIcon = L.divIcon({
+        className: 'current-location-marker',
+        html: '<div style="background-color: #4CAF50; width: 15px; height: 15px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 0 2px #4CAF50;"></div>',
+        iconSize: [15, 15],
+        iconAnchor: [7.5, 7.5]
       })
       
+      const marker = L.marker([lastLocation.lat, lastLocation.lon], {icon: currentIcon}).addTo(map)
       markers.push(marker)
-      infoWindows.push(infoWindow)
+    }
+  }
+  
+  const clearHistory = async (device) => {
+    if (!confirm('Are you sure you want to clear the location history for this device?')) return
+    
+    try {
+      await $fetch(`/api/device/${device.id}`, {
+        method: 'PUT',
+        body: {
+          locationHistory: []
+        }
+      })
+      await fetchDevices()
+      closeModal()
+    } catch (error) {
+      console.error('Failed to clear history:', error)
+    }
+  }
+  
+  const exportHistory = (device) => {
+    if (!device.locationHistory || device.locationHistory.length === 0) return
+    
+    let csvContent = 'Timestamp,Latitude,Longitude\n'
+    
+    device.locationHistory.forEach(item => {
+      const timestamp = new Date(item.timestamp).toISOString()
+      csvContent += `${timestamp},${item.location.lat},${item.location.lon}\n`
     })
     
-    // Fit map to show all markers
-    const bounds = new google.maps.LatLngBounds()
-    device.locationHistory.forEach(item => {
-      bounds.extend(new google.maps.LatLng(item.location.lat, item.location.lon))
-    })
-    map.fitBounds(bounds)
-  } else {
-    // Only one location
-    new google.maps.Marker({
-      position: { lat: lastLocation.lat, lng: lastLocation.lon },
-      map: map,
-      title: 'Current Location',
-      animation: google.maps.Animation.BOUNCE,
-      icon: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png'
-    })
+    const blob = new Blob([csvContent], { type: 'text/csv' })
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `location-history-${device.name.replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+    window.URL.revokeObjectURL(url)
   }
-}
-
-const clearHistory = async (device) => {
-  if (!confirm('Are you sure you want to clear the location history for this device?')) return
-  
-  try {
-    await $fetch(`/api/device/${device.id}`, {
-      method: 'PUT',
-      body: {
-        locationHistory: []
-      }
-    })
-    await fetchDevices()
-    closeModal()
-  } catch (error) {
-    console.error('Failed to clear history:', error)
+  </script>
+  <style scoped>
+  /* Container */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+    font-family: Arial, sans-serif;
   }
-}
-
-const exportHistory = (device) => {
-  if (!device.locationHistory || device.locationHistory.length === 0) return
   
-  let csvContent = 'Timestamp,Latitude,Longitude\n'
+  /* Typography */
+  h1 {
+    text-align: center;
+    color: #333;
+    margin-bottom: 30px;
+  }
   
-  device.locationHistory.forEach(item => {
-    const timestamp = new Date(item.timestamp).toISOString()
-    csvContent += `${timestamp},${item.location.lat},${item.location.lon}\n`
-  })
+  /* Hint Box */
+  .control-hint {
+    background-color: #e3f2fd;
+    border-left: 4px solid #2196F3;
+    padding: 15px;
+    margin-bottom: 30px;
+    border-radius: 4px;
+  }
   
-  const blob = new Blob([csvContent], { type: 'text/csv' })
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `location-history-${device.name.replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.csv`
-  a.click()
-  window.URL.revokeObjectURL(url)
-}
-</script>
-
-<style scoped>
-
-.device-info {
-  background-color: #f8f9fa;
-  padding: 10px;
-  border-radius: 4px;
-  margin-bottom: 10px;
-  font-size: 14px;
-}
-
-.info-row {
-  display: flex;
-  margin-bottom: 4px;
-}
-
-.info-label {
-  width: 60px;
-  font-weight: bold;
-  color: #555;
-}
-
-.info-value {
-  flex: 1;
-  color: #333;
-}
-
-.user-agent-summary {
-  cursor: pointer;
-  margin-top: 8px;
-  color: #666;
-  font-size: 12px;
-}
-
-.user-agent {
-  font-family: monospace;
-  font-size: 11px;
-  color: #666;
-  margin-top: 4px;
-  word-break: break-all;
-  background: #e9ecef;
-  padding: 4px 8px;
-  border-radius: 3px;
-}
-
-.link-box {
-  background-color: #e3f2fd;
-  padding: 10px;
-  border-radius: 4px;
-  margin-top: 10px;
-  word-break: break-all;
-}
-
-.link-hint {
-  font-size: 12px;
-  color: #666;
-  margin-top: 5px;
-  font-style: italic;
-}
-
-
-.btn-copy {
-  background-color: #4CAF50;
-  padding: 4px 8px;
-  font-size: 12px;
-}
-
-.btn-install {
-  background-color: #FF9800;
-  margin-left: 10px;
-}
-.controls {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 20px;
-}
-
-.history-list {
-  margin-top: 20px;
-  max-height: 200px;
-  overflow-y: auto;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  padding: 10px;
-}
-
-.history-item {
-  display: flex;
-  justify-content: space-between;
-  padding: 5px 0;
-  border-bottom: 1px solid #eee;
-}
-
-.history-item:last-child {
-  border-bottom: none;
-}
-
-.history-time {
-  font-weight: bold;
-  color: #666;
-}
-
-.history-coords {
-  font-family: monospace;
-  color: #999;
-}
-.map-modal {
-  background-color: white;
-  padding: 20px;
-  border-radius: 8px;
-  width: 90%;
-  max-width: 1000px;
-  position: relative;
-  max-height: 90vh;
-  overflow-y: auto;
-}
-
-.controls {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 20px;
-}
-
-.history-list {
-  margin-top: 20px;
-  max-height: 200px;
-  overflow-y: auto;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  padding: 10px;
-}
-
-.history-item {
-  display: flex;
-  justify-content: space-between;
-  padding: 5px 0;
-  border-bottom: 1px solid #eee;
-}
-
-.history-item:last-child {
-  border-bottom: none;
-}
-
-.history-time {
-  font-weight: bold;
-  color: #666;
-}
-
-.history-coords {
-  font-family: monospace;
-  color: #999;
-}
-.container {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 20px;
-  font-family: Arial, sans-serif;
-}
-
-h1 {
-  text-align: center;
-  color: #333;
-  margin-bottom: 30px;
-}
-
-.control-hint {
-  background-color: #e3f2fd;
-  border-left: 4px solid #2196F3;
-  padding: 15px;
-  margin-bottom: 30px;
-  border-radius: 4px;
-}
-
-.control-hint h3 {
-  margin: 0;
-  color: #1976D2;
-}
-
-.control-hint ol {
-  margin: 10px 0 0 20px;
-  padding: 0;
-}
-
-.devices-container {
-  display: grid;
-  gap: 20px;
-  margin-bottom: 30px;
-}
-
-.device-card {
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  padding: 15px;
-  background-color: #f9f9f9;
-}
-
-.device-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-}
-
-.device-name-container {
-  display: flex;
-  align-items: center;
-  flex: 1;
-}
-
-.device-name {
-  font-size: 18px;
-  font-weight: bold;
-  cursor: pointer;
-  padding: 5px;
-}
-
-.edit-icon {
-  margin-left: 5px;
-  color: #999;
-  font-size: 16px;
-}
-
-.name-input {
-  font-size: 18px;
-  font-weight: bold;
-  border: 1px solid #2196F3;
-  border-radius: 4px;
-  padding: 4px 8px;
-  background: white;
-}
-
-.status {
-  padding: 5px 10px;
-  border-radius: 4px;
-  color: white;
-  font-size: 14px;
-}
-
-.status-active {
-  background-color: #4CAF50;
-}
-
-.status-inactive {
-  background-color: #f44336;
-}
-
-.device-info {
-  background-color: #f0f0f0;
-  padding: 10px;
-  border-radius: 4px;
-  margin-bottom: 10px;
-  font-size: 14px;
-}
-
-.device-info p {
-  margin: 5px 0;
-}
-
-.location-info {
-  font-size: 14px;
-  color: #666;
-  margin-bottom: 10px;
-}
-
-.location-info p {
-  margin: 5px 0;
-}
-
-.device-actions {
-  display: flex;
-  gap: 10px;
-  margin-top: 10px;
-}
-
-.btn {
-  background-color: #2196F3;
-  color: white;
-  padding: 8px 16px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background-color 0.3s;
-}
-
-.btn:hover {
-  background-color: #1976D2;
-}
-
-.btn:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
-}
-
-.btn-danger {
-  background-color: #f44336;
-}
-
-.btn-danger:hover {
-  background-color: #d32f2f;
-}
-
-.btn-copy {
-  background-color: #4CAF50;
-  padding: 4px 8px;
-  font-size: 12px;
-}
-
-.btn-add {
-  background-color: #4CAF50;
-  padding: 10px 20px;
-  display: block;
-  margin: 0 auto;
-}
-
-.link-box {
-  background-color: #e3f2fd;
-  padding: 10px;
-  border-radius: 4px;
-  margin-top: 10px;
-  word-break: break-all;
-}
-
-.link-label {
-  font-weight: bold;
-  margin-bottom: 5px;
-  color: #1976D2;
-}
-
-.overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.5);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1000;
-}
-
-.map-modal {
-  background-color: white;
-  padding: 20px;
-  border-radius: 8px;
-  width: 80%;
-  max-width: 800px;
-  position: relative;
-}
-
-.close-btn {
-  position: absolute;
-  right: 10px;
-  top: 10px;
-  font-size: 24px;
-  cursor: pointer;
-}
-
-.map-frame {
-  width: 100%;
-  height: 400px;
-  border: none;
-  border-radius: 4px;
-  margin-top: 20px;
-}
-</style>
+  .control-hint h3 {
+    margin: 0;
+    color: #1976D2;
+  }
+  
+  .control-hint ol {
+    margin: 10px 0 0 20px;
+    padding: 0;
+  }
+  
+  /* Devices Grid */
+  .devices-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+    gap: 20px;
+    margin-bottom: 30px;
+  }
+  
+  /* Device Card */
+  .device-card {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 15px;
+    background-color: #f9f9f9;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  }
+  
+  /* Device Header */
+  .device-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  
+  .device-name-container {
+    flex: 1;
+  }
+  
+  .device-name {
+    font-size: 18px;
+    font-weight: bold;
+    cursor: pointer;
+    padding: 5px;
+    display: inline-flex;
+    align-items: center;
+  }
+  
+  .edit-icon {
+    margin-left: 5px;
+    color: #999;
+    font-size: 16px;
+  }
+  
+  .name-input {
+    font-size: 18px;
+    font-weight: bold;
+    border: 1px solid #2196F3;
+    border-radius: 4px;
+    padding: 4px 8px;
+    background: white;
+  }
+  
+  /* Status Badge */
+  .status {
+    padding: 5px 10px;
+    border-radius: 4px;
+    color: white;
+    font-size: 14px;
+  }
+  
+  .status-active {
+    background-color: #4CAF50;
+  }
+  
+  .status-inactive {
+    background-color: #f44336;
+  }
+  
+  /* Info Grids */
+  .device-info, .location-info {
+    background-color: #f8f9fa;
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 10px;
+  }
+  
+  .info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 8px;
+    font-size: 14px;
+  }
+  
+  .info-item {
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .info-item .label {
+    font-weight: bold;
+    color: #555;
+    font-size: 12px;
+    text-transform: uppercase;
+  }
+  
+  .info-item .value {
+    color: #333;
+  }
+  
+  /* Actions */
+  .device-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+  
+  /* Buttons */
+  .btn {
+    background-color: #2196F3;
+    color: white;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+    font-size: 14px;
+  }
+  
+  .btn:hover {
+    background-color: #1976D2;
+  }
+  
+  .btn:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+  }
+  
+  .btn-danger {
+    background-color: #f44336;
+  }
+  
+  .btn-danger:hover {
+    background-color: #d32f2f;
+  }
+  
+  .btn-copy {
+    background-color: #4CAF50;
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+  
+  .btn-add {
+    background-color: #4CAF50;
+    padding: 10px 20px;
+    display: block;
+    margin: 0 auto;
+  }
+  
+  /* Link Box */
+  .link-box {
+    background-color: #e3f2fd;
+    padding: 10px;
+    border-radius: 4px;
+    margin-top: 10px;
+  }
+  
+  .link-label {
+    font-weight: bold;
+    margin-bottom: 5px;
+    color: #1976D2;
+    font-size: 12px;
+  }
+  
+  .link-content {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  
+  .link-url {
+    font-family: monospace;
+    font-size: 12px;
+    word-break: break-all;
+    flex: 1;
+  }
+  
+  /* Map Modal */
+  .overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+  }
+  
+  .map-modal {
+    background-color: white;
+    padding: 20px;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 1000px;
+    position: relative;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+  
+  .close-btn {
+    position: absolute;
+    right: 10px;
+    top: 10px;
+    font-size: 24px;
+    cursor: pointer;
+  }
+  
+  .controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  
+  .history-list {
+    margin-top: 20px;
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+  }
+  
+  .history-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 5px 0;
+    border-bottom: 1px solid #eee;
+  }
+  
+  .history-item:last-child {
+    border-bottom: none;
+  }
+  
+  .history-time {
+    font-weight: bold;
+    color: #666;
+  }
+  
+  .history-coords {
+    font-family: monospace;
+    color: #999;
+  }
+  
+  .current-location-marker {
+    z-index: 1000;
+  }
+  </style>

@@ -55,18 +55,6 @@
 
 <script setup>
 
-const config = useRuntimeConfig()
-
-useHead({
-  script: [
-    {
-      src: `https://maps.googleapis.com/maps/api/js?key=${config.public.googleMapsApiKey}`,
-      async: true,
-      defer: true
-    }
-  ]
-})
-
 import BannerSlider from '~/components/BannerSlider.vue';
 
 const route = useRoute()
