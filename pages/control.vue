@@ -303,7 +303,7 @@ const formatDateTime = (timestamp) => {
 
 const loadGoogleMaps = (device) => {
   const script = document.createElement('script')
-  script.src = 'https://maps.googleapis.com/maps/api/js?key=AIzaSyA-C_c9zgKCDwrvOKnRmW3jjFppjJUhmRU'
+  script.src = `https://maps.googleapis.com/maps/api/js?key=${config.public.googleMapsApiKey}`
   script.onload = () => initializeMap(device)
   document.head.appendChild(script)
 }

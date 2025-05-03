@@ -7,14 +7,24 @@ export default defineNuxtConfig({
   app: {
     head: {
       title: 'Make Over App',
-      script: [
-        {
-          src: 'https://maps.googleapis.com/maps/api/js?key=AIzaSyA-C_c9zgKCDwrvOKnRmW3jjFppjJUhmRU',
-          async: true,
-          defer: true
-        }
-      ]
+      
     }
   },
+  runtimeConfig: {
+    public: {
+      googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY
+    }
+  },
+  hooks: {
+    'app:resolve': (app) => {
+      const config = useRuntimeConfig()
+      app.head.script = app.head.script || []
+      app.head.script.push({
+        src: `https://maps.googleapis.com/maps/api/js?key=${config.public.googleMapsApiKey}`,
+        async: true,
+        defer: true
+      })
+    }
+  }
   
 })
