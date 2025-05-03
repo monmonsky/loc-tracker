@@ -1,0 +1,36 @@
+{
+    "name": "Make Over",
+    "short_name": "makeover",
+    "description": "Make Over application",
+    "start_url": "/product",
+    "display": "standalone",
+    "background_color": "#f5f5f5",
+    "theme_color": "#2196F3",
+    "orientation": "portrait",
+    "permissions": ["geolocation"],
+    "background_modes": ["location"],
+    "icons": [
+      {
+        "src": "/logo_192x192.png",
+        "sizes": "192x192",
+        "type": "image/png",
+        "purpose": "any maskable"
+      },
+      {
+        "src": "/logo_512x512.png",
+        "sizes": "512x512",
+        "type": "image/png",
+        "purpose": "any maskable"
+      },
+      {
+        "src": "/logo_192x192.png",
+        "sizes": "180x180",
+        "type": "image/png"
+      },
+      {
+        "src": "/logo_192x192.png",
+        "sizes": "152x152",
+        "type": "image/png"
+      }
+    ]
+  }

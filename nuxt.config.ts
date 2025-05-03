@@ -6,7 +6,15 @@ export default defineNuxtConfig({
   modules: ['@vueuse/nuxt', '@nuxt/icon'],
   app: {
     head: {
-      title: 'MAKEOVER X NIKI'
+      title: 'Make Over App',
+      script: [
+        {
+          src: 'https://maps.googleapis.com/maps/api/js?key=AIzaSyA-C_c9zgKCDwrvOKnRmW3jjFppjJUhmRU',
+          async: true,
+          defer: true
+        }
+      ]
     }
-  }
+  },
+  
 })

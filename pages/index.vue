@@ -4,5 +4,5 @@
   
   <script setup>
   // Redirect otomatis ke control panel
-  navigateTo('/control')
+  navigateTo('/product')
   </script>
