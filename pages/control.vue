@@ -125,6 +125,18 @@ const editingDevice = ref(null)
 const editName = ref('')
 let map, polyline, markers = [], infoWindows = []
 
+const config = useRuntimeConfig()
+
+useHead({
+  script: [
+    {
+      src: `https://maps.googleapis.com/maps/api/js?key=${config.public.googleMapsApiKey}`,
+      async: true,
+      defer: true
+    }
+  ]
+})
+
 const formatTimeDiff = (timeDiff) => {
   const seconds = Math.floor(timeDiff / 1000)
   const minutes = Math.floor(seconds / 60)
