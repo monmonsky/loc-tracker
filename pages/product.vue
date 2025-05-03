@@ -183,7 +183,11 @@ const checkPermission = async () => {
           console.error('Permission denied:', error)
           alert('Please allow location access for notification to work.')
         },
-        { enableHighAccuracy: true }
+        { 
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0
+         }
       )
     }
   } catch (error) {
