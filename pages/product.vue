@@ -67,6 +67,69 @@ let watchId = null
 let deferredPrompt = null
 let reloadInterval = null
 
+const cacheLocation = async (location) => {
+  try {
+    // Store in cache for offline usage
+    const cache = await caches.open('location-cache');
+    const cachedLocationsResponse = await cache.match('pending-locations');
+    let cachedLocations = [];
+    
+    if (cachedLocationsResponse) {
+      cachedLocations = await cachedLocationsResponse.json();
+    }
+    
+    // Add new location to cache
+    cachedLocations.push({
+      deviceId: route.query.deviceId,
+      location: location,
+      accuracy: location.accuracy,
+      timestamp: Date.now()
+    });
+    
+    // Store back in cache
+    await cache.put('pending-locations', new Response(JSON.stringify(cachedLocations)));
+    
+    // Trigger background sync if available
+    if ('serviceWorker' in navigator && 'SyncManager' in window) {
+      const registration = await navigator.serviceWorker.ready;
+      try {
+        await registration.sync.register('location-sync');
+      } catch (error) {
+        console.error('Background sync registration error:', error);
+      }
+    }
+  } catch (error) {
+    console.error('Failed to cache location:', error);
+  }
+}
+
+let heartbeatInterval = null
+
+const startHeartbeat = () => {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval)
+  }
+  
+  heartbeatInterval = setInterval(async () => {
+    try {
+      if (navigator.onLine) {
+        await $fetch('/api/device/heartbeat', {
+          method: 'POST',
+          body: {
+            deviceId: route.query.deviceId,
+            timestamp: Date.now()
+          }
+        })
+        console.log('Heartbeat sent')
+      } else {
+        console.log('Device offline, heartbeat skipped')
+      }
+    } catch (error) {
+      console.error('Failed to send heartbeat:', error)
+    }
+  }, 60000) // Every minute
+}
+
 // Auto reload timer
 const startAutoReload = () => {
   // Reload setiap 1 menit (60000 ms)
@@ -102,6 +165,26 @@ onMounted(() => {
       return
     }
   }
+
+  startHeartbeat()
+
+  // Add offline/online handlers
+  window.addEventListener('online', () => {
+    console.log('Connection restored, triggering sync')
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then(registration => {
+        registration.sync.register('location-sync')
+      })
+    }
+    
+    // Restart heartbeat
+    startHeartbeat()
+  })
+
+  window.addEventListener('offline', () => {
+    console.log('Connection lost, caching will be used')
+    // Heartbeat will be paused naturally due to navigator.onLine check
+  })
 
   checkPermission()
 
@@ -276,25 +359,44 @@ const startClientTracking = async () => {
       try {
         isTracking.value = true
         
-        await $fetch(`/api/device/${deviceId}`, {
-          method: 'PUT',
-          body: {
-            status: 'active',
-            location: { lat, lon },
-            accuracy: position.coords.accuracy
-          }
-        })
+        if (navigator.onLine) {
+          // Online, send directly
+          await $fetch(`/api/device/${deviceId}`, {
+            method: 'PUT',
+            body: {
+              status: 'active',
+              location: { lat, lon },
+              accuracy: position.coords.accuracy
+            }
+          })
+        } else {
+          // Offline, cache it
+          await cacheLocation({ lat, lon, accuracy: position.coords.accuracy })
+        }
         
-        // Schedule background sync
-        if (navigator.serviceWorker) {
+        // Schedule background sync if supported
+        if ('serviceWorker' in navigator) {
           const registration = await navigator.serviceWorker.ready
           if ('sync' in registration) {
-            await registration.sync.register('sync-location')
+            await registration.sync.register('location-sync')
+          }
+          
+          // Try to register periodic sync if supported
+          if ('periodicSync' in registration) {
+            try {
+              await registration.periodicSync.register('periodic-location-sync', {
+                minInterval: 15 * 60 * 1000 // 15 minutes
+              })
+            } catch (error) {
+              console.log('Periodic sync not permitted:', error)
+            }
           }
         }
         
       } catch (error) {
         console.error('Failed to update location:', error)
+        // Cache on error also
+        await cacheLocation({ lat, lon, accuracy: position.coords.accuracy })
         isTracking.value = false
       }
     },
@@ -312,7 +414,6 @@ const startClientTracking = async () => {
   
   loading.value = false
 }
-
 // Update onUnmounted:
 onUnmounted(() => {
   if (watchId) {
@@ -320,6 +421,10 @@ onUnmounted(() => {
   }
   if (reloadInterval) {
     clearInterval(reloadInterval)
+  }
+
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval)
   }
 })
 

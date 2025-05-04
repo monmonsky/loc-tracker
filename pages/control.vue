@@ -1,6 +1,39 @@
 <template>
   <div class="container">
     <h1>Multi-Device Location Tracker - Control Panel</h1>
+
+    <!-- Tambahkan di bagian atas template, setelah h1 -->
+    <div class="notification-toggle">
+      <label class="switch">
+        <input type="checkbox" v-model="isNotificationEnabled">
+        <span class="slider round"></span>
+      </label>
+      <span>Enable Movement Notifications</span>
+    </div>
+
+    <!-- Notifications area -->
+    <transition-group name="notification" class="notifications">
+      <div 
+        v-for="notification in notifications" 
+        :key="notification.id" 
+        class="notification-item"
+        @click="removeNotification(notification.id)"
+      >
+        <div class="notification-icon">📍</div>
+        <div class="notification-content">
+          <h4>{{ notification.deviceName }}</h4>
+          <p>Moved from location</p>
+          <span class="notification-time">{{ formatTime(notification.timestamp) }}</span>
+        </div>
+        <button class="notification-close" @click.stop="removeNotification(notification.id)">×</button>
+      </div>
+    </transition-group>
+
+    <!-- Sound notification -->
+    <audio ref="notificationSound" preload="auto">
+      <!-- <source src="/notification.mp3" type="audio/mpeg"> -->
+      <source src="https://assets.mixkit.co/active_storage_attachments/files/000/063/717/original/mixkit-correct-answer-notification-946.mp3" type="audio/mpeg">
+    </audio>
     
     <div class="control-hint">
       <h3>📱 How to share tracking link:</h3>
@@ -10,6 +43,9 @@
         <li>Send link to client</li>
         <li>View client's location from control panel</li>
       </ol>
+      <button @click="fetchNotificationHistory()" class="btn btn-history-all">
+        View All Movement History
+      </button>
     </div>
     
     <div class="devices-container">
@@ -33,6 +69,18 @@
           <span :class="['status', device.status === 'active' ? 'status-active' : 'status-inactive']">
             {{ device.status }}
           </span>
+        </div>
+
+        <div v-if="device.lastHeartbeat" class="device-status">
+          <div class="status-indicator">
+            <span 
+              :class="['online-dot', isDeviceActive(device) ? 'active' : 'inactive']"
+            ></span>
+            <span>{{ isDeviceActive(device) ? 'Online' : 'Offline' }}</span>
+          </div>
+          <p class="last-seen">
+            Last seen: {{ formatLastSeen(device.lastHeartbeat) }}
+          </p>
         </div>
         
         <!-- Device Info -->
@@ -82,6 +130,10 @@
           </button>
           <button @click="stopTracking(device)" :disabled="device.status === 'inactive'" class="btn">Stop</button>
           <button @click="showLocation(device)" :disabled="!device.location" class="btn">Show Location</button>
+          <!-- Button untuk notifikasi history -->
+          <button @click="fetchNotificationHistory(device.id)" class="btn btn-history">
+            Movement History
+          </button>
           <button @click="removeDevice(device)" class="btn btn-danger">Remove</button>
         </div>
         
@@ -129,6 +181,28 @@
         </div>
       </div>
     </div>
+
+    <div v-if="showHistoryModal" class="overlay" @click="closeHistoryModal">
+      <div class="history-modal" @click.stop>
+        <span class="close-btn" @click="closeHistoryModal">&times;</span>
+        <h3>Movement History</h3>
+        <div v-if="notificationHistory.length > 0" class="history-list">
+          <div v-for="notification in notificationHistory" :key="notification.id" class="history-item">
+            <div class="history-info">
+              <h4>{{ notification.deviceName }}</h4>
+              <p>{{ formatDateTime(notification.timestamp) }}</p>
+              <p v-if="notification.location">
+                Location: {{ notification.location.lat.toFixed(6) }}, {{ notification.location.lon.toFixed(6) }}
+              </p>
+              <p v-if="notification.accuracy">Accuracy: {{ notification.accuracy.toFixed(1) }}m</p>
+            </div>
+          </div>
+        </div>
+        <div v-else>
+          <p>No movement history found</p>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -141,6 +215,48 @@
   let map = null
   let polyline = null
   let markers = []
+
+  const notifications = ref([])
+  const isNotificationEnabled = ref(true)
+  const deviceStates = ref({}) // Untuk track lokasi terakhir setiap device
+
+  const notificationHistory = ref([])
+  const showHistoryModal = ref(false)
+  const selectedDeviceHistory = ref(null)
+
+  const isDeviceActive = (device) => {
+    if (!device.lastHeartbeat) return false
+    
+    // Consider device active if heartbeat in last 2 minutes
+    const now = Date.now()
+    const twoMinutes = 2 * 60 * 1000
+    return (now - device.lastHeartbeat) < twoMinutes
+  }
+
+  const formatLastSeen = (timestamp) => {
+    const now = Date.now()
+    const diff = now - timestamp
+    
+    // If less than a minute
+    if (diff < 60 * 1000) {
+      return 'just now'
+    }
+    
+    // If less than an hour
+    if (diff < 60 * 60 * 1000) {
+      const minutes = Math.floor(diff / (60 * 1000))
+      return `${minutes} minute${minutes > 1 ? 's' : ''} ago`
+    }
+    
+    // If less than a day
+    if (diff < 24 * 60 * 60 * 1000) {
+      const hours = Math.floor(diff / (60 * 60 * 1000))
+      return `${hours} hour${hours > 1 ? 's' : ''} ago`
+    }
+    
+    // Otherwise, show date
+    return new Date(timestamp).toLocaleString()
+  }
   
   const formatTimeDiff = (timeDiff) => {
     const seconds = Math.floor(timeDiff / 1000)
@@ -191,12 +307,106 @@
     return new Date(timestamp).toLocaleTimeString()
   }
   
+  const notificationSound = ref(null)
   const fetchDevices = async () => {
     try {
       const response = await $fetch('/api/devices')
-      devices.value = response
+      const newDevices = response
+      
+      // Check for movement
+      if (isNotificationEnabled.value) {
+        checkDeviceMovement(devices.value, newDevices)
+      }
+      
+      devices.value = newDevices
     } catch (error) {
       console.error('Failed to fetch devices:', error)
+    }
+  }
+
+  const checkDeviceMovement = async (oldDevices, newDevices) => {
+    for (const newDevice of newDevices) {
+      const oldDevice = oldDevices.find(d => d.id === newDevice.id)
+      
+      if (oldDevice && oldDevice.location && newDevice.location) {
+        const distance = calculateDistance(
+          oldDevice.location.lat,
+          oldDevice.location.lon,
+          newDevice.location.lat,
+          newDevice.location.lon
+        )
+        
+        // Jika pindah lebih dari 5 meter
+        if (distance > 0.005) {
+          showNotification(newDevice)
+          
+          // Save to Redis
+          await saveNotificationToRedis(newDevice)
+        }
+      }
+    }
+  }
+
+  // Fungsi baru untuk menyimpan ke Redis
+  const saveNotificationToRedis = async (device) => {
+    try {
+      await $fetch('/api/notifications', {
+        method: 'POST',
+        body: {
+          deviceId: device.id,
+          deviceName: device.name,
+          location: device.location,
+          accuracy: device.accuracy
+        }
+      })
+    } catch (error) {
+      console.error('Failed to save notification:', error)
+    }
+  }
+
+  // Fungsi untuk mengambil history notifikasi
+  const fetchNotificationHistory = async (deviceId = null) => {
+    try {
+      const query = deviceId ? { deviceId } : {}
+      const history = await $fetch('/api/notifications', { query })
+      notificationHistory.value = history
+      showHistoryModal.value = true
+    } catch (error) {
+      console.error('Failed to fetch notification history:', error)
+    }
+  }
+
+  // Fungsi untuk close history modal
+  const closeHistoryModal = () => {
+    showHistoryModal.value = false
+    selectedDeviceHistory.value = null
+  }
+
+  const showNotification = (device) => {
+    const notification = {
+      id: Date.now(),
+      deviceName: device.name,
+      deviceId: device.id,
+      timestamp: device.lastUpdate || Date.now()
+    }
+    
+    notifications.value.unshift(notification)
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+      removeNotification(notification.id)
+    }, 5000)
+    
+    // Play sound
+    if (notificationSound.value) {
+      notificationSound.value.play().catch(err => console.log('Sound play error:', err))
+    }
+  }
+
+  const removeNotification = (id) => {
+    const index = notifications.value.findIndex(n => n.id === id)
+    if (index !== -1) {
+      notifications.value.splice(index, 1)
     }
   }
   
@@ -512,6 +722,231 @@
   }
   </script>
   <style scoped>
+
+.device-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 5px;
+  padding: 5px 0;
+  border-top: 1px dashed #eee;
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.online-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.online-dot.active {
+  background-color: #4CAF50;
+  box-shadow: 0 0 5px #4CAF50;
+}
+
+.online-dot.inactive {
+  background-color: #F44336;
+}
+
+.last-seen {
+  font-size: 12px;
+  color: #666;
+  margin: 0;
+}
+
+  .btn-history {
+    background-color: #9C27B0;
+  }
+
+  .btn-history:hover {
+    background-color: #7B1FA2;
+  }
+
+  .btn-history-all {
+    background-color: #FF9800;
+    margin-left: 10px;
+  }
+
+  .history-modal {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 800px;
+    position: relative;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+
+  .history-list {
+    margin-top: 20px;
+  }
+
+  .history-item {
+    border-bottom: 1px solid #eee;
+    padding: 10px 0;
+  }
+
+  .history-item:last-child {
+    border-bottom: none;
+  }
+
+  .history-info h4 {
+    margin: 0;
+    color: #333;
+  }
+
+  .history-info p {
+    margin: 5px 0;
+    color: #666;
+    font-size: 14px;
+  }
+  .notification-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+    justify-content: center;
+  }
+
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 60px;
+    height: 34px;
+  }
+
+  .switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+
+  .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: .4s;
+  }
+
+  .slider:before {
+    position: absolute;
+    content: "";
+    height: 26px;
+    width: 26px;
+    left: 4px;
+    bottom: 4px;
+    background-color: white;
+    transition: .4s;
+  }
+
+  input:checked + .slider {
+    background-color: #2196F3;
+  }
+
+  input:checked + .slider:before {
+    transform: translateX(26px);
+  }
+
+  .slider.round {
+    border-radius: 34px;
+  }
+
+  .slider.round:before {
+    border-radius: 50%;
+  }
+
+  .notifications {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 1000;
+    width: 300px;
+  }
+
+  .notification-item {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    padding: 12px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+  }
+
+  .notification-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.2);
+  }
+
+  .notification-icon {
+    font-size: 24px;
+    margin-right: 12px;
+    animation: bounce 1s ease infinite;
+  }
+
+  .notification-content {
+    flex: 1;
+  }
+
+  .notification-content h4 {
+    margin: 0;
+    font-size: 16px;
+    color: #333;
+  }
+
+  .notification-content p {
+    margin: 4px 0;
+    font-size: 14px;
+    color: #666;
+  }
+
+  .notification-time {
+    font-size: 12px;
+    color: #999;
+  }
+
+  .notification-close {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 8px;
+    color: #999;
+  }
+
+  @keyframes bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-5px); }
+  }
+
+  .notification-enter-active,
+  .notification-leave-active {
+    transition: all 0.3s ease;
+  }
+
+  .notification-enter-from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+
+  .notification-leave-to {
+    opacity: 0;
+    transform: translateX(-100%);
+  }
+
   /* Container */
   .container {
     max-width: 1200px;
